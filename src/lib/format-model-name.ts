@@ -40,6 +40,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   'openai-codex': 'Codex',
   google: 'Google',
   minimax: 'MiniMax',
+  nim: 'NVIDIA NIM',
 }
 
 export function formatModelName(raw: string | undefined | null): string {

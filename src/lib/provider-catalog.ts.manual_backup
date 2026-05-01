@@ -137,48 +137,7 @@ export const PROVIDER_CATALOG: Array<ProviderInfo> = [
       2,
     ),
   },
-  {
-    id: 'atomic-chat',
-    name: 'Atomic Chat',
-    description: 'Local LLMs via Atomic Chat — run Llama, Gemma, Qwen and more on your machine.',
-    authTypes: ['local'],
-    docsUrl: 'https://atomic.chat',
-    configExample: JSON.stringify(
-      {
-        auth: {
-          profiles: {
-            'atomic-chat:local': {
-              provider: 'atomic-chat',
-            },
-          },
-        },
-      },
-      null,
-      2,
-    ),
-  },
-  {
-    id: 'nim',
-    name: 'NVIDIA NIM',
-    description: 'NVIDIA Inference Microservices for optimized AI model inference.',
-    authTypes: ['api-key'],
-    docsUrl: 'https://nim.netlify.app/',
-    configExample: JSON.stringify(
-      {
-        auth: {
-          profiles: {
-            'nim:default': {
-              provider: 'nim',
-              apiKey: '***',
-            },
-          },
-        },
-      },
-      null,
-      2,
-    ),
-  },
-]
+  {\n    id: 'atomic-chat',\n    name: 'Atomic Chat',\n    description: 'Local LLMs via Atomic Chat — run Llama, Gemma, Qwen and more on your machine.',\n    authTypes: ['local'],\n    docsUrl: 'https://atomic.chat',\n    configExample: JSON.stringify(\n      {\n        auth: {\n          profiles: {\n            'atomic-chat:local': {\n              provider: 'atomic-chat',\n            },\n          },\n        },\n      },\n      null,\n      2,\n    ),\n  },\n  {\n    id: 'nim',\n    name: 'NVIDIA NIM',\n    description: 'NVIDIA Inference Microservices for optimized AI model inference.',\n    authTypes: ['api-key'],\n    docsUrl: 'https://nim.netlify.app/',\n    configExample: JSON.stringify(\n      {\n        auth: {\n          profiles: {\n            'nim:default': {\n              provider: 'nim',\n              apiKey: '***',\n            },\n          },\n        },\n      },\n      null,\n      2,\n    ),\n  },\n]
 
 export function normalizeProviderId(value: string): string {
   return value.trim().toLowerCase()

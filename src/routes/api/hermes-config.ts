@@ -79,6 +79,12 @@ const PROVIDERS = [
     authType: 'api_key',
     envKeys: [],
   },
+  {
+    id: 'nim',
+    name: 'NVIDIA NIM',
+    authType: 'api_key',
+    envKeys: ['NIM_API_KEY'],
+  },
 ]
 
 function readConfig(): Record<string, unknown> {

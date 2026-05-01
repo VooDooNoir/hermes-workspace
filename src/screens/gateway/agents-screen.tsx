@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatModelName } from '@/lib/format-model-name'
-import { fetchCronJobs } from '@/lib/cron-api'
+import { fetchCronJobs, runCronJob } from '@/lib/cron-api'
 import { toggleAgentPause } from '@/lib/gateway-api'
 import { toast } from '@/components/ui/toast'
 import { AgentHubLayout } from './agent-hub-layout'
@@ -732,6 +732,32 @@ export function AgentsScreen({ variant = 'mission-control' }: AgentsScreenProps)
     queryFn: fetchCronJobs,
     staleTime: 30_000,
     retry: 1,
+  })
+
+  const [runningJobIds, setRunningJobIds] = useState<Set<string>>(new Set())
+
+  const runCronJobMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      setRunningJobIds((prev) => new Set(prev).add(jobId))
+      return runCronJob(jobId)
+    },
+    onSuccess: (_, jobId) => {
+      toast('Job started successfully', { type: 'success' })
+      setRunningJobIds((prev) => {
+        const next = new Set(prev)
+        next.delete(jobId)
+        return next
+      })
+      void cronJobsQuery.refetch()
+    },
+    onError: (error, jobId) => {
+      toast(error instanceof Error ? error.message : 'Failed to run job', { type: 'error' })
+      setRunningJobIds((prev) => {
+        const next = new Set(prev)
+        next.delete(jobId)
+        return next
+      })
+    },
   })
 
   const handlePullRefresh = useCallback(() => {
@@ -1829,6 +1855,14 @@ export function AgentsScreen({ variant = 'mission-control' }: AgentsScreenProps)
                             <span className="rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-[11px] font-medium text-primary-700">
                               {job.enabled ? 'Enabled' : 'Disabled'}
                             </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => runCronJobMutation.mutate(job.id)}
+                              disabled={runningJobIds.has(job.id) || runCronJobMutation.isPending}
+                            >
+                              {runningJobIds.has(job.id) ? 'Running...' : 'Run Now'}
+                            </Button>
                           </div>
 
                           <div className="mt-3 grid gap-3 text-sm text-primary-700 md:grid-cols-3">
