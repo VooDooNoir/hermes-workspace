@@ -11,12 +11,19 @@
  * Chat routes get the full ChatScreen treatment.
  * Non-chat routes show the sub-page content.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Suspense, lazy } from 'react'
 import type { SessionMeta } from '@/screens/chat/types'
-import type { AuthStatus } from '@/lib/hermes-auth'
+import type { AuthStatus } from '@/lib/claude-auth'
 import { cn } from '@/lib/utils'
 import { ConnectionStartupScreen } from '@/components/connection-startup-screen'
 import { ChatSidebar } from '@/screens/chat/components/chat-sidebar'
@@ -32,7 +39,7 @@ import { MobileHamburgerMenu } from '@/components/mobile-hamburger-menu'
 import { MobilePageHeader } from '@/components/mobile-page-header'
 
 import { MobileTerminalInput } from '@/components/terminal/mobile-terminal-input'
-import { HermesReconnectBanner } from '@/components/hermes-reconnect-banner'
+import { ClaudeReconnectBanner } from '@/components/claude-reconnect-banner'
 import { useMobileKeyboard } from '@/hooks/use-mobile-keyboard'
 // System metrics footer removed — not used in Hermes Workspace
 import { CommandPalette } from '@/components/command-palette'
@@ -102,12 +109,11 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     if (path.startsWith('/files')) return 2
     if (path.startsWith('/terminal')) return 3
     if (path.startsWith('/jobs')) return 4
-    if (path.startsWith('/conductor')) return 5
-    if (path.startsWith('/operations')) return 6
-    if (path.startsWith('/memory')) return 7
-    if (path.startsWith('/skills')) return 8
-    if (path.startsWith('/profiles')) return 9
-    if (path.startsWith('/settings')) return 10
+    if (path === '/swarm' || path.startsWith('/swarm2')) return 5
+    if (path.startsWith('/memory')) return 6
+    if (path.startsWith('/skills')) return 7
+    if (path.startsWith('/profiles')) return 8
+    if (path.startsWith('/settings')) return 9
     return -1
   }, [])
 
@@ -135,6 +141,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     if (pathname.startsWith('/jobs')) return 'Jobs'
     if (pathname.startsWith('/conductor')) return 'Conductor'
     if (pathname.startsWith('/operations')) return 'Operations'
+    if (pathname.startsWith('/swarm2') || pathname === '/swarm') return 'Swarm'
     if (pathname.startsWith('/memory')) return 'Memory'
     if (pathname.startsWith('/skills')) return 'Skills'
     if (pathname.startsWith('/profiles')) return 'Profiles'
@@ -268,7 +275,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
         className="relative overflow-hidden theme-bg theme-text"
         style={shellStyle}
       >
-        <HermesReconnectBanner enabled={authState.checked} />
+        <ClaudeReconnectBanner enabled={authState.checked} />
         {/* Electron: native-style title bar (absolute over the padding) */}
         {isElectron && (
           <div

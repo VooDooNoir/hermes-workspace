@@ -14,7 +14,7 @@ import type { PendingSendPayload } from '../pending-send'
 import type { QueryClient } from '@tanstack/react-query'
 import type { ChatMessage, HistoryResponse } from '../types'
 
-const PORTABLE_HISTORY_STORAGE_KEY = 'hermes_portable_chat_main'
+const PORTABLE_HISTORY_STORAGE_KEY = 'claude_portable_chat_main'
 const PORTABLE_HISTORY_LIMIT = 100
 
 type UseChatHistoryInput = {
@@ -244,6 +244,7 @@ export function useChatHistory({
   )
 
   const sessionKeyForHistory = useMemo(() => {
+    if (isNewChat) return 'new'
     const candidates = [
       normalizedForcedSessionKey,
       normalizedActiveSessionKey,
@@ -253,6 +254,7 @@ export function useChatHistory({
     return match || 'main'
   }, [
     explicitRouteSessionKey,
+    isNewChat,
     normalizedActiveSessionKey,
     normalizedForcedSessionKey,
   ])

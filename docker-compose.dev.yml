@@ -1,4 +1,4 @@
-# Project Workspace + Agent — Development Overlay
+# Hermes Workspace + Agent — Development Overlay
 #
 # Builds both services from source instead of pulling pre-built images.
 # Use when modifying the workspace or the bundled agent Dockerfile.

@@ -21,7 +21,8 @@ const execFileAsync = promisify(execFile)
 
 const WORKSPACE_ROOT = (
   process.env.HERMES_WORKSPACE_DIR ||
-  process.env.HERMES_WORKSPACE_DIR ||
+  process.env.CLAUDE_WORKSPACE_DIR ||
+  process.env.HERMES_HOME || process.env.CLAUDE_HOME ||
   path.join(os.homedir(), '.hermes')
 ).trim()
 
@@ -34,13 +35,28 @@ type FileEntry = {
   children?: Array<FileEntry>
 }
 
+/**
+ * Resolve an input path and verify it stays within WORKSPACE_ROOT.
+ *
+ * Uses path.relative() rather than a string-prefix check (which is unsafe
+ * for sibling paths like `/root/.claude` vs `/root/.claude2`). The relative
+ * form rejects any candidate that escapes the root via `..` segments or
+ * that resolves to an absolute path outside the root. See #121.
+ */
 function ensureWorkspacePath(input: string) {
   const raw = input.trim()
   if (!raw) return WORKSPACE_ROOT
   const resolved = path.isAbsolute(raw)
     ? path.resolve(raw)
     : path.resolve(WORKSPACE_ROOT, raw)
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
+  if (resolved === WORKSPACE_ROOT) return resolved
+  const relative = path.relative(WORKSPACE_ROOT, resolved)
+  if (
+    !relative ||
+    relative.startsWith('..') ||
+    relative === '..' ||
+    path.isAbsolute(relative)
+  ) {
     throw new Error('Path is outside workspace')
   }
   return resolved

@@ -52,10 +52,13 @@ type UseStreamingMessageOptions = {
     friendlyId: string,
     clientId: string,
   ) => void
+  onAbort?: () => void
   onSessionResolved?: (payload: {
     sessionKey: string
     friendlyId: string
   }) => void
+  acceptedTimeoutMs?: number
+  handoffTimeoutMs?: number
 }
 
 export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
@@ -67,7 +70,10 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
     onThinking,
     onTool,
     onMessageAccepted,
+    onAbort,
     onSessionResolved,
+    acceptedTimeoutMs,
+    handoffTimeoutMs,
   } = options
 
   const [state, setState] = useState<StreamingState>({
@@ -98,9 +104,8 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
   const processStoreEvent = useChatStore((s) => s.processEvent)
   const clearStreamingSession = useChatStore((s) => s.clearStreamingSession)
 
-  // Hermes tool calls can take 60-120s (file reads, terminal commands, web searches)
-  const ACCEPTED_NO_ACTIVITY_TIMEOUT_MS = 120_000
-  const HANDOFF_NO_ACTIVITY_TIMEOUT_MS = 180_000
+  const ACCEPTED_NO_ACTIVITY_TIMEOUT_MS = acceptedTimeoutMs ?? 120_000
+  const HANDOFF_NO_ACTIVITY_TIMEOUT_MS = handoffTimeoutMs ?? 300_000
 
   const stopFrame = useCallback(() => {
     if (frameRef.current !== null) {
@@ -642,6 +647,10 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
           }
           break
         }
+        case 'heartbeat': {
+          markActivity()
+          break
+        }
         case 'close': {
           if (fullTextRef.current) {
             finishStream()
@@ -652,7 +661,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
           ) {
             transitionToHandoff()
           } else {
-            markFailed('Hermes connection closed')
+            markFailed('Hermes Agent connection closed')
           }
           break
         }
@@ -749,10 +758,10 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
         }
 
         const resolvedSessionKey =
-          response.headers.get('x-hermes-session-key')?.trim() ||
+          response.headers.get('x-claude-session-key')?.trim() ||
           params.sessionKey
         const resolvedFriendlyId =
-          response.headers.get('x-hermes-friendly-id')?.trim() ||
+          response.headers.get('x-claude-friendly-id')?.trim() ||
           resolvedSessionKey
         if (resolvedSessionKey !== activeSessionKeyRef.current) {
           activeSessionKeyRef.current = resolvedSessionKey
@@ -765,8 +774,8 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
         markAccepted()
         schedulePostAcceptanceTimeout('accepted')
 
-        // HTTP 200 — message accepted by Hermes. Clear optimistic "sending"
-        // status so the Retry timer never fires. Hermes does NOT echo
+        // HTTP 200 — message accepted by Hermes Agent. Clear optimistic "sending"
+        // status so the Retry timer never fires. Hermes Agent does NOT echo
         // user messages via SSE, so this is the only confirmation we get.
         if (params.idempotencyKey && onMessageAccepted) {
           onMessageAccepted(
@@ -824,7 +833,17 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
           finishStream()
         }
       } catch (err) {
-        if ((err as Error).name === 'AbortError') return
+        if ((err as Error).name === 'AbortError') {
+          eventSourceRef.current = null
+          clearHandoffTimer()
+          clearSendStreamRun()
+          setState((prev) => ({
+            ...prev,
+            isStreaming: false,
+          }))
+          onAbort?.()
+          return
+        }
         const errorMessage = err instanceof Error ? err.message : String(err)
         markFailed(errorMessage)
       }
@@ -833,6 +852,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
       finishStream,
       markAccepted,
       markFailed,
+      onAbort,
       onMessageAccepted,
       onSessionResolved,
       processEvent,

@@ -27,23 +27,36 @@ export type ProfileDetail = {
   skillsDir?: string
 }
 
-function getHermesRoot(): string {
-  return path.join(os.homedir(), '.hermes')
+function getClaudeRoot(): string {
+  return path.join(os.homedir(), '.claude')
 }
 
 export function getProfilesRoot(): string {
-  return path.join(getHermesRoot(), 'profiles')
+  return path.join(getClaudeRoot(), 'profiles')
 }
 
 function getActiveProfilePath(): string {
-  return path.join(getHermesRoot(), 'active_profile')
+  return path.join(getClaudeRoot(), 'active_profile')
 }
 
+/**
+ * Validate a profile name that will be *written* to disk. The 'default'
+ * profile is reserved — callers must not create or mutate it via the UI.
+ */
 function validateProfileName(name: string): string {
-  const trimmed = name.trim()
-  if (!trimmed) throw new Error('Profile name is required')
+  const trimmed = validateProfileIdentifier(name)
   if (trimmed === 'default')
     throw new Error('Default profile cannot be modified here')
+  return trimmed
+}
+
+/**
+ * Validate a profile name that will only be *read* (e.g. \`cloneFrom\` source).
+ * Any existing profile name is allowed, including 'default'.
+ */
+function validateProfileIdentifier(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Profile name is required')
   if (
     trimmed.includes('/') ||
     trimmed.includes('\\') ||
@@ -150,14 +163,30 @@ export function listProfiles(): Array<ProfileSummary> {
       const sessionCount = countFilesRecursive(sessionsDir, (full) =>
         /\.(jsonl|json|sqlite|db)$/i.test(full),
       )
+      // Resolve model/provider from nested or flat config structure
+      let modelName: string | undefined
+      let providerName: string | undefined
+      if (typeof config.model === 'string') {
+        modelName = config.model
+      } else if (
+        config.model &&
+        typeof config.model === 'object' &&
+        !Array.isArray(config.model)
+      ) {
+        const m = config.model as Record<string, unknown>
+        if (typeof m.default === 'string') modelName = m.default
+        if (typeof m.provider === 'string') providerName = m.provider
+      }
+      if (!providerName && typeof config.provider === 'string') {
+        providerName = config.provider
+      }
       results.push({
         name,
         path: profilePath,
         active: name === activeProfile,
         exists: true,
-        model: typeof config.model === 'string' ? config.model : undefined,
-        provider:
-          typeof config.provider === 'string' ? config.provider : undefined,
+        model: modelName,
+        provider: providerName,
         skillCount,
         sessionCount,
         hasEnv: fs.existsSync(envPath),
@@ -172,16 +201,32 @@ export function listProfiles(): Array<ProfileSummary> {
     }
   }
 
-  const root = getHermesRoot()
+  const root = getClaudeRoot()
   const config = readYamlConfig(path.join(root, 'config.yaml'))
+  // Resolve model/provider for default profile too
+  let defaultModel: string | undefined
+  let defaultProvider: string | undefined
+  if (typeof config.model === 'string') {
+    defaultModel = config.model
+  } else if (
+    config.model &&
+    typeof config.model === 'object' &&
+    !Array.isArray(config.model)
+  ) {
+    const m = config.model as Record<string, unknown>
+    if (typeof m.default === 'string') defaultModel = m.default
+    if (typeof m.provider === 'string') defaultProvider = m.provider
+  }
+  if (!defaultProvider && typeof config.provider === 'string') {
+    defaultProvider = config.provider
+  }
   results.unshift({
     name: 'default',
     path: root,
     active: activeProfile === 'default',
     exists: true,
-    model: typeof config.model === 'string' ? config.model : undefined,
-    provider:
-      typeof config.provider === 'string' ? config.provider : undefined,
+    model: defaultModel,
+    provider: defaultProvider,
     skillCount: countFilesRecursive(
       path.join(root, 'skills'),
       (full) => path.basename(full) === 'SKILL.md',
@@ -206,7 +251,7 @@ export function readProfile(name: string): ProfileDetail {
   const normalized = name.trim() || 'default'
   const profilePath =
     normalized === 'default'
-      ? getHermesRoot()
+      ? getClaudeRoot()
       : path.join(getProfilesRoot(), validateProfileName(normalized))
   if (!fs.existsSync(profilePath)) throw new Error('Profile not found')
   const configPath = path.join(profilePath, 'config.yaml')
@@ -237,8 +282,12 @@ export function setActiveProfile(name: string): void {
   const normalized = validateProfileName(trimmed)
   const profilePath = path.join(getProfilesRoot(), normalized)
   if (!fs.existsSync(profilePath)) throw new Error('Profile not found')
-  fs.mkdirSync(getHermesRoot(), { recursive: true })
+  fs.mkdirSync(getClaudeRoot(), { recursive: true })
   fs.writeFileSync(getActiveProfilePath(), `${normalized}\n`, 'utf-8')
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[profiles] Active profile set to "${normalized}". Restart the Hermes Agent gateway for this profile switch to take effect.`,
+  )
 }
 
 export function createProfile(
@@ -254,12 +303,13 @@ export function createProfile(
 
   // Clone config from source profile if specified
   if (options?.cloneFrom) {
-    const sourceName = validateProfileName(options.cloneFrom)
-    const sourceConfigPath = path.join(
-      getProfilesRoot(),
-      sourceName,
-      'config.yaml',
-    )
+    const sourceName = validateProfileIdentifier(options.cloneFrom)
+    // The 'default' profile lives at ~/.hermes, not ~/.hermes/profiles/default
+    const sourceRoot =
+      sourceName === 'default'
+        ? getClaudeRoot()
+        : path.join(getProfilesRoot(), sourceName)
+    const sourceConfigPath = path.join(sourceRoot, 'config.yaml')
     if (fs.existsSync(sourceConfigPath)) {
       fs.copyFileSync(sourceConfigPath, configPath)
     } else {
@@ -298,7 +348,7 @@ export function deleteProfile(name: string): void {
     throw new Error('Cannot delete the active profile')
   const profilePath = path.join(getProfilesRoot(), normalized)
   if (!fs.existsSync(profilePath)) throw new Error('Profile not found')
-  const trashDir = path.join(getHermesRoot(), 'trash')
+  const trashDir = path.join(getClaudeRoot(), 'trash')
   fs.mkdirSync(trashDir, { recursive: true })
   const trashName = `${normalized}-${Date.now()}`
   fs.renameSync(profilePath, path.join(trashDir, trashName))
@@ -311,18 +361,47 @@ export function updateProfileConfig(
   const normalized = name.trim() || 'default'
   const profilePath =
     normalized === 'default'
-      ? getHermesRoot()
+      ? getClaudeRoot()
       : path.join(getProfilesRoot(), validateProfileName(normalized))
   if (!fs.existsSync(profilePath)) throw new Error('Profile not found')
   const configPath = path.join(profilePath, 'config.yaml')
   const current = readYamlConfig(configPath)
-  const merged = { ...current, ...patch }
-  // Strip undefined keys
-  for (const key of Object.keys(merged)) {
-    if (merged[key] === undefined) delete merged[key]
+
+  // Deep merge helper (same logic as claude-config.ts)
+  function deepMerge(
+    target: Record<string, unknown>,
+    source: Record<string, unknown>,
+  ) {
+    for (const [key, value] of Object.entries(source)) {
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        target[key] &&
+        typeof target[key] === 'object'
+      ) {
+        deepMerge(
+          target[key] as Record<string, unknown>,
+          value as Record<string, unknown>,
+        )
+      } else {
+        target[key] = value
+      }
+    }
   }
+
+  // Handle null values as explicit removals
+  const updates = { ...patch }
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null) {
+      delete current[key]
+      delete updates[key]
+    }
+  }
+  deepMerge(current, updates)
+
   fs.mkdirSync(path.dirname(configPath), { recursive: true })
-  fs.writeFileSync(configPath, YAML.stringify(merged), 'utf-8')
+  fs.writeFileSync(configPath, YAML.stringify(current), 'utf-8')
   return readProfile(normalized)
 }
 

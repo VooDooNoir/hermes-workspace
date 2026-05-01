@@ -161,7 +161,7 @@ function persistStreamingState(
   if (_streamingPersistTimer) clearTimeout(_streamingPersistTimer)
   _streamingPersistTimer = setTimeout(() => {
     sessionStorage.setItem(
-      `hermes_streaming_${sessionKey}`,
+      `claude_streaming_${sessionKey}`,
       JSON.stringify({ ...state, _savedAt: Date.now() }),
     )
   }, 500)
@@ -172,7 +172,7 @@ export function restoreStreamingState(
 ): StreamingState | null {
   if (typeof sessionStorage === 'undefined') return null
 
-  const storageKey = `hermes_streaming_${sessionKey}`
+  const storageKey = `claude_streaming_${sessionKey}`
   const raw = sessionStorage.getItem(storageKey)
   if (!raw) return null
 
@@ -197,7 +197,7 @@ export function restoreStreamingState(
 }
 
 const WAITING_TTL_MS = 120_000
-const WAITING_STORAGE_PREFIX = 'hermes_waiting_'
+const WAITING_STORAGE_PREFIX = 'claude_waiting_'
 
 function persistWaitingState(
   sessionKey: string,
@@ -424,7 +424,8 @@ function getMessageHistoryIndex(
   msg: ChatMessage | null | undefined,
 ): number | undefined {
   if (!msg) return undefined
-  const value = (msg as Record<string, unknown>).__historyIndex
+  const raw = msg as Record<string, unknown>
+  const value = raw.__historyIndex ?? raw.historyIndex
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
@@ -468,10 +469,6 @@ function compareMessagesByTime(left: ChatMessage, right: ChatMessage): number {
     getMessageEventTime(right) ?? getMessageReceiveTime(right) ?? 0
   if (leftTime !== rightTime) return leftTime - rightTime
 
-  const leftRank = getMessageChronologyRank(left)
-  const rightRank = getMessageChronologyRank(right)
-  if (leftRank !== rightRank) return leftRank - rightRank
-
   const leftHistoryIndex = getMessageHistoryIndex(left)
   const rightHistoryIndex = getMessageHistoryIndex(right)
   if (
@@ -481,6 +478,10 @@ function compareMessagesByTime(left: ChatMessage, right: ChatMessage): number {
   ) {
     return leftHistoryIndex - rightHistoryIndex
   }
+
+  const leftRank = getMessageChronologyRank(left)
+  const rightRank = getMessageChronologyRank(right)
+  if (leftRank !== rightRank) return leftRank - rightRank
 
   const leftRealtimeSequence = getMessageRealtimeSequence(left)
   const rightRealtimeSequence = getMessageRealtimeSequence(right)
@@ -1088,7 +1089,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingMap.delete(sessionKey)
         set({ streamingState: streamingMap, lastEventAt: now })
         if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.removeItem(`hermes_streaming_${sessionKey}`)
+          sessionStorage.removeItem(`claude_streaming_${sessionKey}`)
         }
         break
       }

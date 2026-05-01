@@ -8,7 +8,59 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const CLIENT_DIR = join(__dirname, 'dist', 'client')
 
 const port = parseInt(process.env.PORT || '3000', 10)
-const host = process.env.HOST || '0.0.0.0'
+// Default HOST to localhost-only. Operators who want the workspace reachable
+// on a LAN / Tailscale / public surface must opt in explicitly with
+// HOST=0.0.0.0 *and* set CLAUDE_PASSWORD (enforced below). See #122.
+const host = process.env.HOST || '127.0.0.1'
+
+function isNonLoopbackHost(h) {
+  if (!h) return false
+  const norm = h.trim().toLowerCase()
+  if (norm === '127.0.0.1' || norm === '::1' || norm === 'localhost') {
+    return false
+  }
+  return true
+}
+
+if (isNonLoopbackHost(host)) {
+  const password = (process.env.CLAUDE_PASSWORD || '').trim()
+  if (!password) {
+    console.error(
+      '\n[workspace] refusing to start.\n' +
+        `  HOST is set to "${host}" (non-loopback), but CLAUDE_PASSWORD is unset.\n` +
+        '  This would expose a high-privilege control plane (terminals, files, agents)\n' +
+        '  to anyone who can reach the port. Either:\n' +
+        '    • set HOST=127.0.0.1 for local-only access, or\n' +
+        '    • set CLAUDE_PASSWORD=<strong-secret> to enable workspace auth, or\n' +
+        '    • set CLAUDE_ALLOW_INSECURE_REMOTE=1 to bypass this check (not recommended).\n' +
+        '  See #122 for context.\n',
+    )
+    const allowInsecure = (process.env.CLAUDE_ALLOW_INSECURE_REMOTE || '')
+      .trim()
+      .toLowerCase()
+    if (allowInsecure !== '1' && allowInsecure !== 'true' && allowInsecure !== 'yes') {
+      process.exit(1)
+    }
+    console.warn(
+      '[workspace] CLAUDE_ALLOW_INSECURE_REMOTE is set — starting anyway.',
+    )
+  }
+
+  // Warn when serving over plain HTTP with a password: NODE_ENV=production
+  // sets the Secure flag on session cookies, which browsers silently drop
+  // over http://.  Operators must set COOKIE_SECURE=0 for plain-HTTP LAN
+  // deployments.  See #149.
+  const cookieSecureOverride = (process.env.COOKIE_SECURE || '').trim().toLowerCase()
+  const cookieSecureExplicit = cookieSecureOverride === '0' || cookieSecureOverride === 'false' || cookieSecureOverride === 'no'
+  if (!cookieSecureExplicit && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '\n[workspace] warning: plain-HTTP LAN deployment detected.\n' +
+        '  NODE_ENV=production enables the Secure flag on session cookies.\n' +
+        '  Browsers silently drop Secure cookies over http://, so login will fail.\n' +
+        '  Add COOKIE_SECURE=0 to your .env to fix this.  See #149.\n',
+    )
+  }
+}
 
 const MIME_TYPES = {
   '.js': 'application/javascript',

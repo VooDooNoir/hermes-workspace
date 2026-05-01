@@ -184,7 +184,7 @@ function ChatHeaderComponent({
       onOpenAgentDetails()
       return
     }
-    window.dispatchEvent(new CustomEvent('hermes:chat-agent-details'))
+    window.dispatchEvent(new CustomEvent('claude:chat-agent-details'))
   }, [onOpenAgentDetails])
 
   useEffect(() => {
@@ -351,7 +351,7 @@ function ChatHeaderComponent({
                 void saveTitleEdit()
               }}
               onKeyDown={(event) => {
-                if (event.key === 'Enter') {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
                   event.preventDefault()
                   void saveTitleEdit()
                   return
@@ -492,7 +492,7 @@ function ChatHeaderComponent({
                 }
               />
               <TooltipContent side="bottom">
-                Thinking: Adaptive — Claude reasons before responding
+                Thinking: Adaptive — Hermes reasons before responding
               </TooltipContent>
             </TooltipRoot>
           </TooltipProvider>
