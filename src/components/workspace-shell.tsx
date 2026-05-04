@@ -21,13 +21,11 @@ import {
   useState,
 } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
-import type { SessionMeta } from '@/screens/chat/types'
-import type { AuthStatus } from '@/lib/claude-auth'
+import { fetchClaudeAuthStatus, type AuthStatus } from '@/lib/claude-auth'
 import { cn } from '@/lib/utils'
 import { ConnectionStartupScreen } from '@/components/connection-startup-screen'
 import { ChatSidebar } from '@/screens/chat/components/chat-sidebar'
-import { chatQueryKeys } from '@/screens/chat/chat-queries'
+import { useChatSessions } from '@/screens/chat/hooks/use-chat-sessions'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { SIDEBAR_TOGGLE_EVENT } from '@/hooks/use-global-shortcuts'
 import { useSwipeNavigation } from '@/hooks/use-swipe-navigation'
@@ -41,7 +39,7 @@ import { MobilePageHeader } from '@/components/mobile-page-header'
 import { MobileTerminalInput } from '@/components/terminal/mobile-terminal-input'
 import { ClaudeReconnectBanner } from '@/components/claude-reconnect-banner'
 import { useMobileKeyboard } from '@/hooks/use-mobile-keyboard'
-// System metrics footer removed — not used in Hermes Workspace
+import { SystemMetricsFooter } from '@/components/system-metrics-footer'
 import { CommandPalette } from '@/components/command-palette'
 import { useSettings } from '@/hooks/use-settings'
 // ActivityTicker moved to dashboard-only (too noisy for global header)
@@ -52,20 +50,8 @@ const TerminalWorkspace = lazy(() =>
   })),
 )
 
-type SessionsListResponse = Array<SessionMeta>
 export const DESKTOP_SIDEBAR_BACKDROP_CLASS =
   'fixed left-0 bottom-0 top-[var(--titlebar-h,0px)] w-[300px] z-10 bg-black/10 backdrop-blur-[1px]'
-
-async function fetchSessions(): Promise<SessionsListResponse> {
-  const res = await fetch('/api/sessions')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await res.json()
-  return Array.isArray(data?.sessions)
-    ? data.sessions
-    : Array.isArray(data)
-      ? data
-      : []
-}
 
 type WorkspaceShellProps = {
   children?: React.ReactNode
@@ -112,8 +98,9 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     if (path === '/swarm' || path.startsWith('/swarm2')) return 5
     if (path.startsWith('/memory')) return 6
     if (path.startsWith('/skills')) return 7
-    if (path.startsWith('/profiles')) return 8
-    if (path.startsWith('/settings')) return 9
+    if (path.startsWith('/mcp')) return 8
+    if (path.startsWith('/profiles')) return 9
+    if (path.startsWith('/settings')) return 10
     return -1
   }, [])
 
@@ -134,6 +121,47 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     setConnectionVerified(true)
   }, [])
 
+  // Fallback startup verification in the shell itself.
+  // This prevents a bad loading loop if the splash component gets stuck even
+  // though /api/auth-check or /api/connection-status are already healthy.
+  useEffect(() => {
+    if (typeof window === 'undefined' || connectionVerified) return
+    let cancelled = false
+
+    const verify = async () => {
+      try {
+        const status = await fetchClaudeAuthStatus(3000)
+        if (cancelled) return
+        setAuthStatus(status)
+        setConnectionVerified(true)
+        return
+      } catch {
+        // Fall through to connection-status as a looser readiness signal.
+      }
+
+      try {
+        const res = await fetch('/api/connection-status', { cache: 'no-store' })
+        if (!res.ok || cancelled) return
+        const data = (await res.json()) as {
+          ok?: boolean
+          chatReady?: boolean
+          modelConfigured?: boolean
+        }
+        if (data?.ok || (data?.chatReady && data?.modelConfigured)) {
+          setAuthStatus({ authenticated: true, authRequired: false })
+          setConnectionVerified(true)
+        }
+      } catch {
+        // Keep the startup screen if both checks fail.
+      }
+    }
+
+    void verify()
+    return () => {
+      cancelled = true
+    }
+  }, [connectionVerified])
+
   // Derive active session from URL
   const mobilePageTitle = (() => {
     if (pathname.startsWith('/terminal')) return 'Terminal'
@@ -144,6 +172,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     if (pathname.startsWith('/swarm2') || pathname === '/swarm') return 'Swarm'
     if (pathname.startsWith('/memory')) return 'Memory'
     if (pathname.startsWith('/skills')) return 'Skills'
+    if (pathname.startsWith('/mcp')) return 'MCP'
     if (pathname.startsWith('/profiles')) return 'Profiles'
     if (pathname.startsWith('/settings')) return 'Settings'
     if (pathname.startsWith('/debug')) return 'Debug'
@@ -155,30 +184,24 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
   const activeFriendlyId = chatMatch ? chatMatch[1] : 'main'
   const isOnChatRoute = Boolean(chatMatch) || pathname === '/new'
   const isOnTerminalRoute = pathname.startsWith('/terminal')
+  const isOnPlaygroundRoute = pathname === '/playground' || pathname.startsWith('/playground/')
   const hideChatSidebar = isOnChatRoute && chatFocusMode
   const showDesktopSidebarBackdrop =
     !isMobile && !isOnChatRoute && !sidebarCollapsed
 
-  // Sessions query — shared across sidebar and chat
-  const sessionsQuery = useQuery({
-    queryKey: chatQueryKeys.sessions,
-    queryFn: fetchSessions,
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+  const isNewChat = activeFriendlyId === 'new'
+
+  // Sessions state — shared semantic source for sidebar and chat header
+  const {
+    sessions,
+    sessionsLoading,
+    sessionsFetching,
+    sessionsError,
+    refetchSessions,
+  } = useChatSessions({
+    activeFriendlyId,
+    isNewChat,
   })
-
-  const sessions = sessionsQuery.data ?? []
-  const sessionsLoading = sessionsQuery.isLoading
-  const sessionsFetching = sessionsQuery.isFetching
-  const sessionsError = sessionsQuery.isError
-    ? sessionsQuery.error instanceof Error
-      ? sessionsQuery.error.message
-      : 'Failed to load sessions'
-    : null
-
-  const refetchSessions = useCallback(() => {
-    void sessionsQuery.refetch()
-  }, [sessionsQuery])
 
   const startNewChat = useCallback(() => {
     setCreatingSession(true)
@@ -342,7 +365,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
                 : !isMobile &&
                     !isOnChatRoute &&
                     settings.showSystemMetricsFooter
-                  ? 'pb-[calc(1.5rem+1.75rem)]'
+                  ? 'pb-7'
                   : '',
             ].join(' ')}
             data-tour="chat-area"
@@ -392,12 +415,12 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
             </div>
           </main>
 
-          {/* Chat panel — visible on non-chat routes */}
-          {!isOnChatRoute && !isMobile && <ChatPanel />}
+          {/* Chat panel — visible on non-chat routes (but not in HermesWorld, which has its own in-game chat) */}
+          {!isOnChatRoute && !isOnPlaygroundRoute && !isMobile && <ChatPanel />}
         </div>
 
-        {/* Floating chat toggle — visible on non-chat routes */}
-        {!isOnChatRoute && !isMobile && <ChatPanelToggle />}
+        {/* Floating chat toggle — visible on non-chat routes (but not in HermesWorld) */}
+        {!isOnChatRoute && !isOnPlaygroundRoute && !isMobile && <ChatPanelToggle />}
 
         {showDesktopSidebarBackdrop ? (
           <button
@@ -414,7 +437,9 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
       </div>
 
       <MobileHamburgerMenu />
-      {/* System metrics footer removed */}
+      {!isMobile && !isOnChatRoute && settings.showSystemMetricsFooter ? (
+        <SystemMetricsFooter leftOffsetPx={sidebarCollapsed ? 48 : 300} />
+      ) : null}
       <CommandPalette pathname={pathname} sessions={sessions} />
     </>
   )

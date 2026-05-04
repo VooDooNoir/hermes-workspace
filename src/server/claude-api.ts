@@ -15,11 +15,14 @@ import {
   probeGateway,
 } from './gateway-capabilities'
 import {
+  createSession as createDashboardSession,
   deleteSession as deleteDashboardSession,
+  forkSession as forkDashboardSession,
   getSession as getDashboardSession,
   getSessionMessages as getDashboardSessionMessages,
   listSessions as listDashboardSessions,
   searchSessions as searchDashboardSessions,
+  updateSession as updateDashboardSession,
 } from './claude-dashboard-api'
 
 const _authHeaders = (): Record<string, string> =>
@@ -151,6 +154,10 @@ export async function createSession(opts?: {
   title?: string
   model?: string
 }): Promise<ClaudeSession> {
+  if (getCapabilities().dashboard.available) {
+    const resp = await createDashboardSession(opts || {})
+    return resp.session as ClaudeSession
+  }
   const resp = await claudePost<{ session: ClaudeSession }>(
     '/api/sessions',
     opts || {},
@@ -162,6 +169,10 @@ export async function updateSession(
   sessionId: string,
   updates: { title?: string },
 ): Promise<ClaudeSession> {
+  if (getCapabilities().dashboard.available) {
+    const resp = await updateDashboardSession(sessionId, updates)
+    return resp.session as ClaudeSession
+  }
   const resp = await claudePatch<{ session: ClaudeSession }>(
     `/api/sessions/${sessionId}`,
     updates,
@@ -205,6 +216,12 @@ export async function searchSessions(
 export async function forkSession(
   sessionId: string,
 ): Promise<{ session: ClaudeSession; forked_from: string }> {
+  if (getCapabilities().dashboard.available) {
+    return forkDashboardSession(sessionId) as Promise<{
+      session: ClaudeSession
+      forked_from: string
+    }>
+  }
   return claudePost(`/api/sessions/${sessionId}/fork`)
 }
 
@@ -333,7 +350,10 @@ export function toSessionSummary(
 
 type StreamChatOptions = {
   signal?: AbortSignal
-  onEvent: (payload: { event: string; data: Record<string, unknown> }) => void
+  onEvent: (payload: {
+    event: string
+    data: Record<string, unknown>
+  }) => void | Promise<void>
 }
 
 /**
@@ -372,6 +392,30 @@ export async function streamChat(
   let buffer = ''
   let currentEvent = ''
 
+  // Debug tap: when HERMES_TOOL_DEBUG=1, dump every raw SSE event to a file so
+  // we can inspect what vanilla Hermes Agent actually emits during tool calls
+  // (event names + data shapes) without changing any agent code.
+  const toolDebug = process.env.HERMES_TOOL_DEBUG === '1'
+  let toolDebugStream: NodeJS.WritableStream | null = null
+  if (toolDebug) {
+    try {
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const os = await import('node:os')
+      const dir = path.join(os.tmpdir(), 'hermes-tool-debug')
+      fs.mkdirSync(dir, { recursive: true })
+      const file = path.join(
+        dir,
+        `sse-${sessionId}-${Date.now()}.log`,
+      )
+      toolDebugStream = fs.createWriteStream(file, { flags: 'a' })
+      console.log(`[claude-api][tool-debug] writing SSE dump to ${file}`)
+      toolDebugStream.write(`# session=${sessionId} ts=${new Date().toISOString()}\n`)
+    } catch (err) {
+      console.warn('[claude-api][tool-debug] failed to open dump file:', err)
+    }
+  }
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -383,16 +427,33 @@ export async function streamChat(
     for (const line of lines) {
       if (line.startsWith('event: ')) {
         currentEvent = line.slice(7).trim()
+        if (toolDebugStream) toolDebugStream.write(`event: ${currentEvent}\n`)
       } else if (line.startsWith('data: ')) {
         const dataStr = line.slice(6)
-        if (dataStr === '[DONE]') continue
+        if (dataStr === '[DONE]') {
+          if (toolDebugStream) toolDebugStream.write('data: [DONE]\n\n')
+          continue
+        }
+        if (toolDebugStream) {
+          // Truncate very long payloads so the dump stays human-readable.
+          const trimmed =
+            dataStr.length > 4000 ? dataStr.slice(0, 4000) + '...[trunc]' : dataStr
+          toolDebugStream.write(`data: ${trimmed}\n\n`)
+        }
         try {
           const data = JSON.parse(dataStr) as Record<string, unknown>
-          opts.onEvent({ event: currentEvent || 'message', data })
+          await opts.onEvent({ event: currentEvent || 'message', data })
         } catch {
           // skip malformed JSON
         }
       }
+    }
+  }
+  if (toolDebugStream) {
+    try {
+      toolDebugStream.end()
+    } catch {
+      // ignore close errors
     }
   }
 }

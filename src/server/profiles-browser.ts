@@ -27,8 +27,33 @@ export type ProfileDetail = {
   skillsDir?: string
 }
 
+const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const TEXT_REWRITE_EXTENSIONS = new Set([
+  '.md',
+  '.txt',
+  '.yaml',
+  '.yml',
+  '.json',
+  '.jsonl',
+  '.toml',
+  '.env',
+  '.plist',
+  '.sh',
+  '.js',
+  '.ts',
+  '.tsx',
+])
+
+function getHermesRoot(): string {
+  return (
+    process.env.HERMES_HOME ??
+    process.env.CLAUDE_HOME ??
+    path.join(os.homedir(), '.hermes')
+  )
+}
+
 function getClaudeRoot(): string {
-  return path.join(os.homedir(), '.claude')
+  return getHermesRoot()
 }
 
 export function getProfilesRoot(): string {
@@ -74,9 +99,10 @@ function safeReadText(filePath: string): string {
 function readYamlConfig(configPath: string): Record<string, unknown> {
   if (!fs.existsSync(configPath)) return {}
   try {
-    return (
-      (YAML.parse(safeReadText(configPath)) as Record<string, unknown>) || {}
-    )
+    const parsed = YAML.parse(safeReadText(configPath)) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {}
   } catch {
     return {}
   }
@@ -148,9 +174,16 @@ export function listProfiles(): Array<ProfileSummary> {
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
       const name = entry.name
       const profilePath = path.join(profilesRoot, name)
+      if (!entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) continue
+        try {
+          if (!fs.statSync(profilePath).isDirectory()) continue
+        } catch {
+          continue
+        }
+      }
       const configPath = path.join(profilePath, 'config.yaml')
       const envPath = path.join(profilePath, '.env')
       const skillsDir = path.join(profilePath, 'skills')
@@ -284,7 +317,6 @@ export function setActiveProfile(name: string): void {
   if (!fs.existsSync(profilePath)) throw new Error('Profile not found')
   fs.mkdirSync(getClaudeRoot(), { recursive: true })
   fs.writeFileSync(getActiveProfilePath(), `${normalized}\n`, 'utf-8')
-  // eslint-disable-next-line no-console
   console.warn(
     `[profiles] Active profile set to "${normalized}". Restart the Hermes Agent gateway for this profile switch to take effect.`,
   )

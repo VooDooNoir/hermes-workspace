@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import appCss from '../styles.css?url'
 import { SearchModal } from '@/components/search/search-modal'
+import { UsageMeter } from '@/components/usage-meter'
 import { TerminalShortcutListener } from '@/components/terminal-shortcut-listener'
 import { GlobalShortcutListener } from '@/components/global-shortcut-listener'
 import { WorkspaceShell } from '@/components/workspace-shell'
@@ -15,6 +16,7 @@ import { MobilePromptTrigger } from '@/components/mobile-prompt/MobilePromptTrig
 import { Toaster } from '@/components/ui/toast'
 import { OnboardingTour } from '@/components/onboarding/onboarding-tour'
 import { KeyboardShortcutsModal } from '@/components/keyboard-shortcuts-modal'
+import { UpdateCenterNotifier } from '@/components/update-center-notifier'
 import { initializeSettingsAppearance } from '@/hooks/use-settings'
 import { useApplyChatWidth } from '@/hooks/use-chat-settings'
 import {
@@ -23,19 +25,20 @@ import {
   ONBOARDING_KEY,
 } from '@/components/onboarding/claude-onboarding'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { LoginScreen } from '@/components/auth/login-screen'
+import { fetchClaudeAuthStatus, type AuthStatus } from '@/lib/claude-auth'
 import { getRootSurfaceState } from './-root-layout-state'
-
 
 const APP_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
   "form-action 'self'",
-  "frame-ancestors 'none'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
+  // frame-ancestors is ignored in meta CSP and must be sent as an HTTP header.
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
   "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "connect-src 'self' ws: wss: http: https:",
   "worker-src 'self' blob:",
   "media-src 'self' blob: data:",
@@ -206,7 +209,9 @@ export const Route = createRootRoute({
 
 const queryClient = new QueryClient()
 
-export function getRootLayoutMode(onboardingComplete: string | null): 'onboarding' | 'workspace' {
+export function getRootLayoutMode(
+  onboardingComplete: string | null,
+): 'onboarding' | 'workspace' {
   return onboardingComplete === 'true' ? 'workspace' : 'onboarding'
 }
 
@@ -215,7 +220,11 @@ export function wrapInlineScript(source: string): string {
 }
 
 type ServiceWorkerLike = {
-  getRegistrations: () => Promise<ReadonlyArray<{ unregister: () => boolean | Promise<boolean> | void | Promise<void> }>>
+  getRegistrations: () => Promise<
+    ReadonlyArray<{
+      unregister: () => boolean | Promise<boolean> | void | Promise<void>
+    }>
+  >
 }
 
 type CachesLike = {
@@ -241,7 +250,9 @@ export async function unregisterServiceWorkers({
 
   await cachesApi
     ?.keys()
-    .then((names) => Promise.allSettled(names.map((name) => cachesApi.delete(name))))
+    .then((names) =>
+      Promise.allSettled(names.map((name) => cachesApi.delete(name))),
+    )
     .catch(() => undefined)
 }
 
@@ -249,9 +260,12 @@ function RootLayout() {
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(
     null,
   )
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [mounted, setMounted] = useState(false)
   useApplyChatWidth()
 
   useEffect(() => {
+    setMounted(true)
     initializeSettingsAppearance()
 
     const syncOnboardingCompletion = () => {
@@ -267,6 +281,24 @@ function RootLayout() {
     }
 
     syncOnboardingCompletion()
+
+    void fetch('/api/connection-status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          status: {
+            ok?: boolean
+            chatReady?: boolean
+            modelConfigured?: boolean
+          } | null,
+        ) => {
+          if (status?.ok || (status?.chatReady && status?.modelConfigured)) {
+            localStorage.setItem(ONBOARDING_KEY, 'true')
+            syncOnboardingCompletion()
+          }
+        },
+      )
+      .catch(() => undefined)
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key && event.key !== ONBOARDING_KEY) return
@@ -284,7 +316,8 @@ function RootLayout() {
     )
 
     void unregisterServiceWorkers({
-      serviceWorker: 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
+      serviceWorker:
+        'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
       cachesApi: 'caches' in window ? caches : undefined,
     })
 
@@ -297,12 +330,30 @@ function RootLayout() {
     }
   }, [])
 
-  const rootSurfaceState = getRootSurfaceState(onboardingComplete)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    let cancelled = false
+    fetchClaudeAuthStatus()
+      .then((status) => {
+        if (!cancelled) setAuthStatus(status)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthStatus({ authenticated: true, authRequired: false })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const rootSurfaceState = getRootSurfaceState(onboardingComplete, authStatus)
 
   return (
     <QueryClientProvider client={queryClient}>
       <Toaster />
-      {rootSurfaceState.showOnboarding ? <ClaudeOnboarding /> : null}
+      {mounted && rootSurfaceState.showLogin ? <LoginScreen /> : null}
+      {mounted && rootSurfaceState.showOnboarding ? <ClaudeOnboarding /> : null}
       {rootSurfaceState.showWorkspaceShell ? (
         <>
           <GlobalShortcutListener />
@@ -317,7 +368,11 @@ function RootLayout() {
             </ErrorBoundary>
           </WorkspaceShell>
           <SearchModal />
+          {/* UsageMeter must be mounted at root so the OPEN_USAGE event from
+              the search modal's Usage tile has a listener. See #258. */}
+          <UsageMeter />
           <KeyboardShortcutsModal />
+          <UpdateCenterNotifier />
           {rootSurfaceState.showPostOnboardingOverlays ? (
             <>
               <MobilePromptTrigger />
@@ -349,10 +404,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         `),
           }}
         />
-        <script dangerouslySetInnerHTML={{ __html: wrapInlineScript(themeScript) }} />
+        <script
+          dangerouslySetInnerHTML={{ __html: wrapInlineScript(themeScript) }}
+        />
         <HeadContent />
         <script
-          dangerouslySetInnerHTML={{ __html: wrapInlineScript(themeColorScript) }}
+          dangerouslySetInnerHTML={{
+            __html: wrapInlineScript(themeColorScript),
+          }}
         />
       </head>
       <body>

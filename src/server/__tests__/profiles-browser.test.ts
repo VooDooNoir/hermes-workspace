@@ -37,6 +37,7 @@ vi.mock('node:os', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete process.env.HERMES_HOME
   delete process.env.CLAUDE_HOME
 })
 
@@ -46,12 +47,48 @@ async function loadMod() {
 }
 
 describe('profiles-browser', () => {
+  describe('listProfiles', () => {
+    it('includes symlinked profiles when the target is a directory', async () => {
+      const root = path.join('/home/testuser', '.hermes')
+      const profilesRoot = path.join(root, 'profiles')
+      const kayPath = path.join(profilesRoot, 'kay')
+      const brokenPath = path.join(profilesRoot, 'broken')
+
+      existsSync.mockImplementation((p: string) => {
+        return p === root || p === profilesRoot || p === kayPath || p === brokenPath
+      })
+      readdirSync.mockImplementation((p: string) => {
+        if (p === profilesRoot) {
+          return [
+            { name: 'kay', isDirectory: () => false, isSymbolicLink: () => true },
+            { name: 'broken', isDirectory: () => false, isSymbolicLink: () => true },
+            { name: 'README.md', isDirectory: () => false, isSymbolicLink: () => false },
+          ] as never
+        }
+        return []
+      })
+      statSync.mockImplementation((p: string) => {
+        if (p === kayPath) return { isDirectory: () => true, isFile: () => false, mtimeMs: 0 } as never
+        if (p === brokenPath) throw new Error('broken symlink')
+        return { isDirectory: () => false, isFile: () => false, mtimeMs: 0 } as never
+      })
+
+      const mod = await loadMod()
+      const names = mod.listProfiles().map((profile) => profile.name)
+
+      expect(names).toContain('default')
+      expect(names).toContain('kay')
+      expect(names).not.toContain('broken')
+      expect(names).not.toContain('README.md')
+    })
+  })
+
   describe('setActiveProfile', () => {
     it('emits console.warn about gateway restart when setting non-default profile', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       existsSync.mockImplementation((p: string) => {
-        if (p === path.join('/home/testuser', '.claude', 'profiles', 'jarvis')) return true
+        if (p === path.join('/home/testuser', '.hermes', 'profiles', 'jarvis')) return true
         return false
       })
 
@@ -65,19 +102,19 @@ describe('profiles-browser', () => {
 
     it('clears active profile file when setting default', async () => {
       existsSync.mockImplementation((p: string) => {
-        if (p === path.join('/home/testuser', '.claude', 'active_profile')) return true
+        if (p === path.join('/home/testuser', '.hermes', 'active_profile')) return true
         return false
       })
 
       const mod = await loadMod()
       mod.setActiveProfile('default')
-      expect(unlinkSync).toHaveBeenCalledWith(path.join('/home/testuser', '.claude', 'active_profile'))
+      expect(unlinkSync).toHaveBeenCalledWith(path.join('/home/testuser', '.hermes', 'active_profile'))
     })
   })
 
   describe('updateProfileConfig', () => {
     it('deep-merges nested objects instead of overwriting', async () => {
-      const root = path.join('/home/testuser', '.claude')
+      const root = path.join('/home/testuser', '.hermes')
       const configPath = path.join(root, 'config.yaml')
       const existingYaml =
         'model:\n  default: gpt-4\n  provider: openai\n  extra: keep-me\ntopLevel: stay\n'
@@ -107,7 +144,7 @@ describe('profiles-browser', () => {
     })
 
     it('handles null as explicit deletion of keys', async () => {
-      const root = path.join('/home/testuser', '.claude')
+      const root = path.join('/home/testuser', '.hermes')
       const configPath = path.join(root, 'config.yaml')
       const existingYaml =
         'model:\n  default: gpt-4\n  provider: openai\napi_key: secret\n'
